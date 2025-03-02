@@ -1,0 +1,194 @@
+---
+title: "STAT762 Project"
+author: "James Spalding, Omar Rodriguez, and Brandon Jaeger"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+##################################
+# TODOS:
+# Make better title
+# Make table output look nice
+# Write better intro + conclusion
+# Expand explanations
+##################################
+
+knitr::opts_chunk$set(echo=FALSE, include=FALSE, warning=FALSE, message=FALSE)
+
+library(tidyverse)
+library(patchwork)
+library(LearnBayes)
+```
+
+```{r}
+power_test = function(n,p,reps=1000){
+  set.seed(1)
+  t_power = 0
+  t_est = c()
+  ci_l = c()
+  ci_u = c()
+  
+  bayes_power = 0
+  bayes_est = c()
+  pi_l = c()
+  pi_u = c()
+  
+  for (i in 1:reps) {
+    #simulate data from binomial
+    sim_data = rbinom(n, size=1, prob=p)
+    success = sum(sim_data)
+    
+    #perform t test
+    if(all(sim_data == 0)){
+      t_est = 0
+      conf_int = c(0,1)
+    }else
+    if(all(sim_data == 1)){
+      t_est = 1
+      conf_int = c(0,1)
+    }else{
+      t_test = t.test(sim_data, mu=.5)
+      conf_int = t_test$conf.int
+      t_est = c(t_est, t_test$estimate)
+    }
+    
+    if(conf_int[1] > .5 | conf_int[2] < .5){
+        t_power = t_power + 1
+    }
+      
+    ci_l = c(ci_l, conf_int[1])
+    ci_u = c(ci_u, conf_int[2])
+    
+    #obtain posterior via non-informative prior
+    a_post = 1 + success
+    b_post = 1 + n - success
+    
+    #obtain prob interval
+    prob_int = qbeta(c(.025, .5, .975), a_post, b_post)
+    bayes_est = c(bayes_est, prob_int[2])
+    pi_l = c(pi_l, prob_int[1])
+    pi_u = c(pi_u, prob_int[3])
+    
+    if(prob_int[1] > .5 | prob_int[3] < .5){
+      bayes_power = bayes_power + 1
+    }
+  }
+  
+  power_results = data.frame(n=n, p=p, t_power=t_power, bayes_power=bayes_power,
+                             t_est=mean(t_est), bayes_est=mean(bayes_est),
+                             ci_l=mean(ci_l), ci_u=mean(ci_u),
+                             pi_l=mean(pi_l), pi_u=mean(pi_u))
+  
+  return(power_results)
+}
+```
+
+```{r}
+#get data
+df = data.frame()
+ns = c(10,15,20,25)
+ps = seq(.5,.9,by=.01)
+
+for(n in ns){
+  for(p in ps){
+    df = rbind(df,power_test(n, p))
+  }
+}
+```
+
+The goal of this study is to determine the scenarios in which Bayesian methods are more effective than traditional frequentist approaches, and when each should be used.
+
+In this study, data was simulated from a binomial distribution. Each test was repeated 1,000 times, with the following null and alternative hypotheses:
+
+$$H_0: p=0.5 ~~~~ H_1:p\not= 0.5$$
+
+The $n$ and $p$ parameters of the simulated binomial distributions were changed with $n=\{10,15,20,25\}$ and $p$ ranging from 0.5 - 0.9. Since the results are symmetrical, the $p$ values ranging from 0 - 0.49 were omitted.
+
+In the Bayesian approach, a non-informative prior of $beta(\alpha=1,~~\beta=1)$ was used, with the posterior being computed as $beta(\alpha^*=\alpha+\text{success}, ~~\beta^*=\beta+\text{failure})$.
+
+The first comparison made is between the estimated $p$ values. To compare directly, the mean difference was computed at all $p$ values as follows:
+
+$$p_{\text{est}}-p_{\text{true}}$$
+
+This was done with the estimated $p$ for both the T and Bayesian approaches. The results are shown in the table below:
+
+```{r, include=TRUE, message=TRUE}
+diffs = data.frame()
+
+for(i in ns){
+  diff = df %>% filter(n==i) %>%
+    mutate(t_diff = t_est-p,
+           b_diff = bayes_est-p) %>% 
+    summarize(n = i,
+              mean_t_diff = round(mean(t_diff),4),
+              mean_b_diff = round(mean(b_diff),4))
+  
+  diffs = rbind(diffs, diff)
+}
+
+diffs
+```
+
+As shown, neither approach has a clear winner as to which provides a closer estimate.
+
+Next, we compared the range of the 95% confidence and probability intervals of the T and Bayesian approaches, respectively. To make this comparison, we took the mean difference of the upper and lower bounds of both intervals at each level of $n$. The results are shown below:
+
+```{r, include=TRUE, message=TRUE}
+ranges = data.frame()
+
+for(i in ns){
+  range = df %>% filter(n==i) %>%
+    mutate(t_range = ci_u-ci_l,
+           b_range = pi_u-pi_l) %>% 
+    summarize(n = i,
+              mean_t_range = round(mean(t_range),4),
+              mean_b_range = round(mean(b_range),4))
+  
+  ranges = rbind(ranges, range)
+}
+
+ranges
+```
+
+In this case, the Bayesian approach performs much better at the lowest $n$ value. Furthermore, although the difference gets smaller as $n$ increases, the range of the probability interval manages to stay narrower than that of the confidence interval for every one of the $n$ values tested.
+
+\newpage
+
+Finally, we performed a power test on both approaches. The power of each test is computed as the number of times the test was able to reject the null hypothesis out of the total times tested, in this case 1,000. The results are plotted below:
+
+```{r, include=TRUE}
+plots = list()
+
+#create plots for all n
+for(i in ns){
+  plot = ggplot(df %>% filter(n==i))+
+    geom_line(aes(x = p, y = t_power, color = 'T'), size = .7) +
+    geom_line(aes(x = p, y = bayes_power, color = 'Bayes'), size = .7) +
+    ylim(0, 1000) +
+    labs(x=paste('n =',i),
+         color='Test',
+         y=NULL)+
+    scale_color_manual(values = c('T' = 'red', 'Bayes' = 'black'))+
+    theme_minimal()+
+    theme(legend.position = 'none')
+  
+  plots[[as.character(i)]] = plot
+}
+
+#create shared y axis
+y_axis_label = ggplot() + 
+  annotate('text', x = 1, y = 500, label = 'Power', angle = 90, size = 5) + 
+  theme_void()
+
+final_plot = (y_axis_label|
+             (plots$'10' + plots$'15') / (plots$'20' + plots$'25'))+
+  plot_layout(widths = c(0.05, 1), guides = 'collect') & 
+  theme(legend.position = 'right')
+
+final_plot+
+  plot_annotation(title = 'Power Comparison of T-Test vs Bayesian Methods',
+                  theme = theme(plot.title = element_text(hjust = 0.5)))
+```
+
+Similar to the interval ranges, the Bayesian approach has a strong advantage at lower $n$ values, with diminishing gains as $n$ increases. Another advantage of the Bayesian approach is that, while the power of the T test plateaus or even drops off around $p=.85$, the power of the Bayesian test remains unaffected.
